@@ -1,0 +1,21 @@
+.venv/
+__pycache__/
+.pytest_cache/
+salida/
+.env
+
+# Guía del profesor (no se distribuye)
+GUIA.md
+
+# Solución del profesor (las 12 tools); el alumnado las construye
+herramientas/recon.py
+
+.DS_Store
+
+# Solución del profesor de la fase de enumeración
+herramientas/enumeracion.py
+herramientas/test_enumeracion_profesor.py
+
+# Lanzadores de las versiones acabadas (solo del profesor, repo Corsario)
+lanzar_solucion.py
+enumerar_solucion.py
