@@ -32,7 +32,11 @@
 # -------------------- ESCRIBE AQUÍ TU ALCANCE --------------------
 # (borra el ejemplo de abajo y pon el tuyo)
 
-# Ejemplo (prográmalo con TU objetivo real):
-# empresa.com
-# *.empresa.com
-# !blog.empresa.com
+# Alcance autorizado: únicamente las 8 IPs activas (172.17.0.3 - 172.17.0.10)
+172.17.0.3/32
+172.17.0.4/30
+172.17.0.8/31
+172.17.0.10/32
+
+# Exclusiones explícitas (pasarela y máquina propia)
+!172.17.0.2
