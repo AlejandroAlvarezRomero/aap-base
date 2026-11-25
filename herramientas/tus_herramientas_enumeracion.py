@@ -26,68 +26,246 @@ Cuando funcionen, pruébalas a mano (dentro y fuera del alcance) y lanza el
 agente con enumerar.py.
 """
 
+import json
+from datetime import datetime, timezone
+
 from guard import protegida
 import escaneo as e
 
 
+MAX_SERVICIOS_RESUMEN = 40
+MAX_CVES_RESUMEN = 8
+
+
 @protegida(objetivo="red")
 def nmap_descubrir(red: str) -> str:
-    """TODO: describe en una o dos frases qué hace, qué recibe (una red en
-    notación CIDR, p. ej. 172.17.0.0/24) y qué devuelve."""
-    # TODO 0. Acepta SOLO una red IPv4 bien escrita: canonica = e.red_ipv4(red).
-    #         Si es None (un nombre, una máscara, IPv6...), devuelve un ERROR que lo explique.
-    #         ¿Por qué no aceptar un nombre? Pista: ¿a qué IP resolverá, y quién lo comprueba?
-    # TODO 1. Lanza nmap con las opciones fijadas, sobre la red canónica:
-    #           xml, error = e.ejecutar_nmap(e.NMAP_DESCUBRIR, canonica, e.TIEMPO_DESCUBRIR)
-    #         Si hay error, devuélvelo como texto: return f"ERROR: {error}"
-    # TODO 2. Saca las IP vivas:            vivos = e.equipos_vivos(xml)
-    # TODO 3. Guarda el XML completo:       eid = e.guardar_evidencia("nmap_descubrir", red, xml, "xml")
-    # TODO 4. Devuelve el resumen: cuántos equipos, cuáles y la evidencia (eid).
-    #         Si e.escaneo_incompleto(xml) dice algo, avísalo: puede haber más equipos.
-    return "PENDIENTE: nmap_descubrir no está implementada todavía."
+    """Descubre los equipos vivos (IPv4) en una red CIDR (p. ej. 172.17.0.4/30) y devuelve sus IPs y la evidencia.
 
+    Recibe:
+        red: red IPv4 en notación CIDR (ejemplo: '172.17.0.4/30' o '172.17.0.3/32').
+             No acepta nombres de dominio, IPs sueltas sin máscara ni máscaras decimales.
+
+    Importante sobre el alcance:
+        Si al consultar una red amplia (como /24) recibes 'BLOQUEADO' porque contiene
+        IPs fuera de alcance o excluidas, divide el descubrimiento en las subredes CIDR
+        autorizadas más pequeñas (/25, /28, /29, /30, /31 o /32).
+    """
+    canonica = e.red_ipv4(red)
+    if canonica is None:
+        return (
+            f"ERROR: '{red}' no es una red IPv4 CIDR válida. "
+            "Usa notación CIDR como '172.17.0.4/30' (no se aceptan dominios, IPs sueltas ni máscaras decimales)."
+        )
+
+    xml, error = e.ejecutar_nmap(e.NMAP_DESCUBRIR, canonica, e.TIEMPO_DESCUBRIR)
+    if error:
+        return f"ERROR: {error}"
+
+    eid = e.guardar_evidencia("nmap_descubrir", canonica, xml, "xml")
+    vivos = e.equipos_vivos(xml)
+    incompleto = e.escaneo_incompleto(xml)
+
+    lineas = []
+    if incompleto:
+        lineas.append(
+            f"AVISO: escaneo incompleto ({incompleto}); no terminó, puede haber más equipos vivos en {canonica}."
+        )
+        if vivos:
+            lineas.append(f"Equipos vivos detectados hasta el corte en {canonica} ({len(vivos)}): {', '.join(vivos)}")
+    else:
+        if vivos:
+            lineas.append(f"Equipos vivos en {canonica} ({len(vivos)}): {', '.join(vivos)}")
+        else:
+            lineas.append(f"0 equipos vivos detectados en {canonica}.")
+
+    lineas.append(f"Evidencia: {eid}")
+    return "\n".join(lineas)
 
 @protegida(objetivo="host")
 def nmap_servicios(host: str) -> str:
-    """TODO: describe qué hace (todos los puertos TCP, servicio y versión),
-    qué recibe (UNA IP) y qué devuelve."""
-    # TODO 0. El guard deja pasar una IP, pero también un rango pequeño o un nombre
-    #         que esté en alcance. Esta herramienta escanea UNA IP: compruébalo con
-    #         e.es_ip(host) (solo IPv4) y, si no lo es, devuelve un ERROR que lo explique.
-    # TODO 1. xml, error = e.ejecutar_nmap(e.NMAP_SERVICIOS, host, e.TIEMPO_SERVICIOS)
-    # TODO 2. servicios = e.servicios_abiertos(xml)
-    # TODO 3. Guarda el XML completo (guardar_evidencia) Y los servicios para que
-    #         cve_lookup pueda usarlos:  e.guardar_servicios(host, servicios)
-    # TODO 4. Resumen: una línea por servicio (e.describir_servicio(s)) y la evidencia.
-    #         Si hay muchísimos, acota (p. ej. 40) y di cuántos quedan en la evidencia.
-    # TODO 5. Si e.escaneo_incompleto(xml) dice algo, AVÍSALO: «no terminó» no es lo
-    #         mismo que «no hay puertos». No digas «ningún puerto abierto» si no acabó.
-    return "PENDIENTE: nmap_servicios no está implementada todavía."
+    """Escanea todos los puertos TCP abiertos de UNA única dirección IPv4 e identifica servicio y versión.
 
+    Recibe:
+        host: una única dirección IPv4 en alcance (ejemplo: '172.17.0.5').
+              Rechaza rangos CIDR, nombres de dominio o IPv6.
+
+    Devuelve:
+        Total de puertos TCP abiertos, una línea por servicio detectado y el código de evidencia.
+        Además registra los servicios del host para que cve_lookup pueda consultarlos después.
+    """
+    objetivo = host.strip()
+    if not e.es_ip(objetivo):
+        return (
+            f"ERROR: '{host}' no es una única dirección IPv4 válida "
+            "(no se aceptan rangos CIDR, nombres de dominio ni IPv6)."
+        )
+
+    xml, error = e.ejecutar_nmap(e.NMAP_SERVICIOS, objetivo, e.TIEMPO_SERVICIOS)
+    if error:
+        return f"ERROR: {error}"
+
+    eid = e.guardar_evidencia("nmap_servicios", objetivo, xml, "xml")
+    servicios = e.servicios_abiertos(xml)
+    e.guardar_servicios(objetivo, servicios)
+    incompleto = e.escaneo_incompleto(xml)
+
+    lineas = []
+    if incompleto:
+        lineas.append(
+            f"AVISO: escaneo incompleto ({incompleto}); no terminó, puede haber puertos abiertos sin detectar."
+        )
+        if servicios:
+            lineas.append(f"{objetivo}: {len(servicios)} puertos TCP abiertos detectados antes del corte")
+        else:
+            lineas.append(
+                f"{objetivo}: el escaneo no terminó (0 puertos detectados antes del corte; no implica que estén cerrados)"
+            )
+    else:
+        lineas.append(f"{objetivo}: {len(servicios)} puertos TCP abiertos")
+
+    for s in servicios[:MAX_SERVICIOS_RESUMEN]:
+        lineas.append(e.describir_servicio(s))
+
+    if len(servicios) > MAX_SERVICIOS_RESUMEN:
+        restantes = len(servicios) - MAX_SERVICIOS_RESUMEN
+        lineas.append(f"... y {restantes} puertos más guardados en la evidencia completa.")
+
+    lineas.append(f"Evidencia: {eid}")
+    return "\n".join(lineas)
 
 @protegida(objetivo="host")
 def cve_lookup(host: str, puerto: int) -> str:
-    """TODO: describe qué hace (vulnerabilidades potenciales del servicio que
-    nmap_servicios vio en ese host y puerto, con CVSS, EPSS, KEV y CWE), qué
-    recibe y qué devuelve. Avisa de que hay que ejecutar antes nmap_servicios."""
-    # TODO 1. Busca el servicio: lista = e.servicios_de(host). Si es None, di que
-    #         primero hay que lanzar nmap_servicios. Busca en la lista el de ese puerto.
-    #         OJO: el producto y la versión salen de TU escaneo, no del modelo.
-    # TODO 2. Si ya se consultó en esta ejecución, no repitas:
-    #           previo = e.resumen_previo(clave)
-    #         ¿Qué debe llevar la clave? Si solo pones host y puerto, y luego vuelves a
-    #         escanear y el servicio ha cambiado, ¿qué pasaría? (Pista: producto y versión.)
-    # TODO 3. cves, metodo = e.buscar_cves(servicio)   (puede fallar: try/except → "ERROR: ...")
-    # TODO 4. Completa cada CVE con EPSS y KEV (si una falla, sigue sin ella y avísalo):
-    #           p = e.epss([c["id"] for c in cves]);  k = e.kev()
-    #           c["epss"] = p.get(c["id"])
-    #           c["kev"] = k.get(c["id"], False)   # dict = está · False = no está
-    #         Si KEV NO respondió, pon c["kev"] = None («sin dato»), NUNCA False:
-    #         «no lo sé» no es lo mismo que «no está».
-    # TODO 5. Guarda TODOS en la evidencia (json.dumps) y ordénalos: e.ordenar_candidatos(cves)
-    # TODO 6. Resumen: servicio, cómo se buscó (metodo), la FECHA de la consulta (EPSS y
-    #         KEV cambian a diario), cuántos hay y los 5-8 primeros
-    #         con e.describir_cve(c). Recuerda en el texto que son POTENCIALES:
-    #         coincidir por versión no demuestra que el servicio sea vulnerable.
-    #         Guárdalo con e.recordar_resumen(clave, resumen) antes de devolverlo.
-    return "PENDIENTE: cve_lookup no está implementada todavía."
+    """Consulta vulnerabilidades potenciales (NVD, EPSS y KEV) del servicio detectado por nmap_servicios en un host y puerto TCP.
+
+    Recibe:
+        host: dirección IPv4 única previamente escaneada con nmap_servicios.
+        puerto: número de puerto TCP entero (1-65535) abierto en ese host.
+
+    Requisitos:
+        Ejecuta siempre nmap_servicios(host) antes de llamar a esta herramienta;
+        el producto y la versión se obtienen automáticamente de ese escaneo previo.
+    """
+    objetivo = host.strip()
+    if not e.es_ip(objetivo):
+        return f"ERROR: '{host}' no es una única dirección IPv4 válida."
+
+    if isinstance(puerto, bool) or not isinstance(puerto, int) or not (1 <= puerto <= 65535):
+        return f"ERROR: puerto no válido ({puerto!r}); debe ser un entero entre 1 y 65535."
+
+    lista = e.servicios_de(objetivo)
+    if lista is None:
+        return (
+            f"ERROR: no hay escaneo previo de servicios para {objetivo}. "
+            f"Ejecuta primero nmap_servicios(host='{objetivo}')."
+        )
+
+    servicio = next((s for s in lista if s.get("puerto") == puerto), None)
+    if servicio is None:
+        return f"AVISO: el puerto {puerto}/tcp no figura como abierto en el escaneo previo de {objetivo}."
+
+    tiene_cpe = e.cpe_de(servicio) is not None
+    tiene_prod_ver = bool(servicio.get("producto") and e.version_corta(servicio))
+    if not (tiene_cpe or tiene_prod_ver):
+        return (
+            f"AVISO: {objetivo} · {e.describir_servicio(servicio)} no tiene producto/versión identificada "
+            "en el escaneo; no hay versión registrada para consultar CVEs."
+        )
+
+    clave = (
+        f"cve_lookup:{objetivo}:{puerto}:"
+        f"{servicio.get('producto', '')}:{servicio.get('version', '')}:"
+        f"{','.join(servicio.get('cpe', []))}"
+    )
+    previo = e.resumen_previo(clave)
+    if previo is not None:
+        return previo
+
+    try:
+        cves, metodo = e.buscar_cves(servicio)
+    except Exception as exc:
+        return f"ERROR: fallo al consultar NVD para {objetivo}:{puerto}: {e.limpio(exc, 200)}"
+
+    fecha_consulta = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+    if not cves:
+        contenido_vacio = json.dumps(
+            {
+                "host": objetivo,
+                "puerto": puerto,
+                "servicio": servicio,
+                "fecha_consulta": fecha_consulta,
+                "metodo": metodo,
+                "total": 0,
+                "cves": [],
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        eid = e.guardar_evidencia("cve_lookup", f"{objetivo}-{puerto}", contenido_vacio, "json")
+        resumen = "\n".join([
+            f"{objetivo} · {e.describir_servicio(servicio)}",
+            f"Consulta ({fecha_consulta}): {metodo}",
+            "0 CVEs candidatos encontrados.",
+            f"Evidencia: {eid}",
+        ])
+        e.recordar_resumen(clave, resumen)
+        return resumen
+
+    avisos_fuentes = []
+    ids = [c["id"] for c in cves]
+
+    try:
+        mapa_epss = e.epss(ids)
+        epss_ok = True
+    except Exception as exc:
+        mapa_epss = {}
+        epss_ok = False
+        avisos_fuentes.append(f"AVISO: EPSS no respondió ({e.limpio(exc, 100)}); marcado como 'sin dato'.")
+
+    try:
+        mapa_kev = e.kev()
+        kev_ok = True
+    except Exception as exc:
+        mapa_kev = {}
+        kev_ok = False
+        avisos_fuentes.append(f"AVISO: KEV no respondió ({e.limpio(exc, 100)}); marcado como 'sin dato'.")
+
+    for c in cves:
+        c["epss"] = mapa_epss.get(c["id"]) if epss_ok else None
+        c["kev"] = mapa_kev.get(c["id"], False) if kev_ok else None
+
+    ordenados = e.ordenar_candidatos(cves)
+
+    contenido_completo = json.dumps(
+        {
+            "host": objetivo,
+            "puerto": puerto,
+            "servicio": servicio,
+            "fecha_consulta": fecha_consulta,
+            "metodo": metodo,
+            "avisos_fuentes": avisos_fuentes,
+            "total": len(ordenados),
+            "cves": ordenados,
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
+    eid = e.guardar_evidencia("cve_lookup", f"{objetivo}-{puerto}", contenido_completo, "json")
+
+    lineas = [
+        f"{objetivo} · {e.describir_servicio(servicio)}",
+        f"Consulta ({fecha_consulta}): {metodo}",
+        *avisos_fuentes,
+        f"CVEs candidatos encontrados: {len(ordenados)} (mostrando los {min(len(ordenados), MAX_CVES_RESUMEN)} más relevantes):",
+    ]
+    for c in ordenados[:MAX_CVES_RESUMEN]:
+        lineas.append(f"- {e.describir_cve(c)}")
+
+    lineas.append(
+        "Nota: son vulnerabilidades POTENCIALES basadas solo en versión/CPE; requieren comprobación manual."
+    )
+    lineas.append(f"Evidencia: {eid}")
+
+    resumen = "\n".join(lineas)
+    e.recordar_resumen(clave, resumen)
+    return resumen

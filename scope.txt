@@ -29,14 +29,12 @@
 # ===========================================================================
 
 
-# -------------------- ESCRIBE AQUÍ TU ALCANCE --------------------
-# (borra el ejemplo de abajo y pon el tuyo)
-
-# Alcance autorizado: únicamente las 8 IPs activas (172.17.0.3 - 172.17.0.10)
+# -------------------- ALCANCE AUTORIZADO (práctica de clase) --------------------
+# Solo las ocho IPs documentadas en la auditoría manual: 172.17.0.3 - 172.17.0.10.
+# Fuera: nuestra propia máquina (172.17.0.1), la puerta de enlace, 172.17.0.2
+# y cualquier otra dirección. Se escriben como CIDR para que nmap_descubrir
+# pueda trabajar con subredes sin incluir IPs no autorizadas.
 172.17.0.3/32
 172.17.0.4/30
 172.17.0.8/31
 172.17.0.10/32
-
-# Exclusiones explícitas (pasarela y máquina propia)
-!172.17.0.2
